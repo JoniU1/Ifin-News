@@ -243,11 +243,22 @@ def write_html(items, now):
         t = (it["sort_dt"] + dt.timedelta(hours=3)).strftime("%H:%M")
         title = html.escape(it["title"])
         rows.append(
-            f'<a class="item" href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
+            f'<a class="item" data-src="{it["source"]}" '
+            f'href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
             f'<span class="tag" style="background:{color}">{it["source"]}</span>'
             f'<span class="ttl">{title}</span>'
             f'<span class="tm">{t}</span></a>')
     body = "\n".join(rows)
+
+    # Filter buttons: All + one per source
+    btns = ['<button class="fbtn active" data-f="all" onclick="flt(this)">הכל</button>']
+    for name in ["Calcalist", "Bizportal", "Globes", "TheMarker"]:
+        color = SITE_COLORS[name]
+        btns.append(
+            f'<button class="fbtn" data-f="{name}" onclick="flt(this)" '
+            f'style="--c:{color}">{name}</button>')
+    buttons = "\n".join(btns)
+
     doc = f"""<!doctype html><html lang="he" dir="rtl"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>מצרף חדשות כלכלה</title>
@@ -258,21 +269,43 @@ def write_html(items, now):
          margin:0 auto; padding:1rem; background:#fafafa; color:#111; }}
   @media (prefers-color-scheme: dark) {{
     body {{ background:#16181c; color:#eee; }}
-    .item {{ border-color:#2a2d33 !important; }} .item:hover {{ background:#1e2127 !important; }} }}
+    .item {{ border-color:#2a2d33 !important; }} .item:hover {{ background:#1e2127 !important; }}
+    .fbtn {{ background:#23262d; color:#ddd; border-color:#333 !important; }} }}
   h1 {{ font-size:1.3rem; margin:.3rem 0; }}
-  .sub {{ color:#888; font-size:.8rem; margin-bottom:1rem; }}
+  .sub {{ color:#888; font-size:.8rem; margin-bottom:.7rem; }}
+  .filters {{ display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1rem;
+             position:sticky; top:0; background:inherit; padding:.4rem 0; z-index:5; }}
+  .fbtn {{ cursor:pointer; border:1px solid #ccc; border-radius:999px;
+          padding:.35rem .8rem; font-size:.8rem; font-weight:600;
+          background:#fff; color:#333; }}
+  .fbtn.active {{ background:var(--c,#333); color:#fff; border-color:var(--c,#333); }}
   .item {{ display:flex; align-items:center; gap:.6rem; text-decoration:none;
           color:inherit; padding:.7rem .5rem; border-bottom:1px solid #e5e5e5; }}
   .item:hover {{ background:#f0f0f0; }}
+  .item.hide {{ display:none; }}
   .tag {{ flex:0 0 auto; color:#fff; font-size:.68rem; font-weight:600;
          padding:.12rem .45rem; border-radius:4px; min-width:62px; text-align:center; }}
   .ttl {{ flex:1 1 auto; font-size:.95rem; line-height:1.35; }}
   .tm {{ flex:0 0 auto; color:#999; font-size:.72rem; font-variant-numeric:tabular-nums; }}
 </style></head><body>
 <h1>מצרף חדשות כלכלה</h1>
-<div class="sub">כלכליסט · ביזפורטל · גלובס · דה־מרקר — {len(items)} כותרות ·
-עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) · <a href="feed.xml">RSS</a></div>
+<div class="sub">{len(items)} כותרות · עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) ·
+<a href="feed.xml">RSS</a></div>
+<div class="filters">
+{buttons}
+</div>
 {body}
+<script>
+function flt(btn) {{
+  var f = btn.getAttribute('data-f');
+  document.querySelectorAll('.fbtn').forEach(function(b){{ b.classList.remove('active'); }});
+  btn.classList.add('active');
+  document.querySelectorAll('.item').forEach(function(it){{
+    if (f === 'all' || it.getAttribute('data-src') === f) it.classList.remove('hide');
+    else it.classList.add('hide');
+  }});
+}}
+</script>
 </body></html>"""
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(doc)
