@@ -71,6 +71,18 @@ def fetch(url):
             print(f"    cloudscraper returned {r.status_code}", file=sys.stderr)
         except Exception as e:
             print(f"    cloudscraper error: {e}", file=sys.stderr)
+
+    # Last resort: free reader proxy for sites that block datacenter IPs.
+    # Returns Markdown, not HTML — parsers must handle the PROXY_MD:: marker.
+    try:
+        proxied = "https://r.jina.ai/" + url
+        r = requests.get(proxied, headers={"User-Agent": UA}, timeout=45)
+        if r.status_code == 200 and len(r.text) > 2000:
+            print("    fetched via r.jina.ai proxy (markdown)", file=sys.stderr)
+            return "PROXY_MD::" + r.text
+        print(f"    proxy returned {r.status_code}", file=sys.stderr)
+    except Exception as e:
+        print(f"    proxy error: {e}", file=sys.stderr)
     return None
 
 
@@ -104,8 +116,24 @@ def parse_bizportal(html_text, base):
 
 
 def parse_calcalist(html_text, base):
-    soup = BeautifulSoup(html_text, "lxml")
+    import re
     items, seen = [], set()
+
+    # Case 1: proxy returned Markdown — extract [title](link) pairs
+    if html_text.startswith("PROXY_MD::"):
+        md = html_text[len("PROXY_MD::"):]
+        for m in re.finditer(r"\[([^\]]+)\]\((https?://[^)]*?/article/[^)]+)\)", md):
+            title = clean(m.group(1))
+            link = m.group(2).split(" ")[0].strip()
+            if len(title) < 15 or link in seen:
+                continue
+            seen.add(link)
+            items.append({"title": title, "link": link, "summary": "",
+                          "source": "Calcalist"})
+        return items
+
+    # Case 2: normal HTML
+    soup = BeautifulSoup(html_text, "lxml")
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if "/article/" not in href:
