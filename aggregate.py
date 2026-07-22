@@ -71,13 +71,23 @@ def scrape_site(page, site):
     except Exception:
         pass
 
-    # Grab every anchor: href + visible text. Extraction by URL pattern.
+    # For each matching link, grab its href, text, AND the text of a nearby
+    # container (row/card) so we can read the date/time shown beside it.
     anchors = page.eval_on_selector_all(
         "a[href]",
-        "els => els.map(e => ({href: e.href, text: e.innerText}))"
+        """els => els.map(e => {
+            let ctx = e;
+            for (let i = 0; i < 4 && ctx.parentElement; i++) {
+                ctx = ctx.parentElement;
+                if (ctx.innerText && ctx.innerText.length > e.innerText.length + 3) break;
+            }
+            return {href: e.href, text: e.innerText, ctx: ctx ? ctx.innerText : ""};
+        })"""
     )
 
     pat = re.compile(site["pattern"])
+    now = dt.datetime.now(dt.timezone.utc)
+    today_il = (now + dt.timedelta(hours=3)).date()
     items, seen = [], set()
     for a in anchors:
         href = a.get("href") or ""
@@ -92,22 +102,48 @@ def scrape_site(page, site):
         seen.add(link)
         item = {"title": title, "link": link, "source": site["name"],
                 "ts": None, "order": len(items)}
-        # TheMarker: real datetime from URL date + any HH:MM in the title area
+
+        ctx = a.get("ctx") or ""
+
         if site["name"] == "TheMarker":
             dm = re.search(r"/(\d{4})-(\d{2})-(\d{2})/", href)
+            tm = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", ctx)
             if dm:
                 y, mo, d = map(int, dm.groups())
+                hh, mm = (int(tm.group(1)), int(tm.group(2))) if tm else (12, 0)
                 try:
-                    item["ts"] = dt.datetime(y, mo, d, 12, 0, tzinfo=dt.timezone.utc)
+                    item["ts"] = dt.datetime(y, mo, d, hh, mm, tzinfo=dt.timezone.utc)
                 except ValueError:
                     pass
-        # Globes: stash did for ranking
+
+        elif site["name"] in ("Calcalist", "Bizportal"):
+            dmatch = re.search(r"\b(\d{2})/(\d{2})/(\d{4})\b", ctx)
+            tmatch = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", ctx)
+            if dmatch:
+                d, mo, y = map(int, dmatch.groups())
+                try:
+                    hh, mm = (int(tmatch.group(1)), int(tmatch.group(2))) if tmatch else (12, 0)
+                    item["ts"] = dt.datetime(y, mo, d, hh, mm, tzinfo=dt.timezone.utc)
+                except ValueError:
+                    pass
+            elif tmatch:
+                hh, mm = int(tmatch.group(1)), int(tmatch.group(2))
+                try:
+                    il_dt = dt.datetime(today_il.year, today_il.month, today_il.day,
+                                        hh, mm) - dt.timedelta(hours=3)
+                    item["ts"] = il_dt.replace(tzinfo=dt.timezone.utc)
+                except ValueError:
+                    pass
+
         if site["name"] == "Globes":
             m = re.search(r"did=(\d+)", href)
             item["_did"] = int(m.group(1)) if m else 0
+
         items.append(item)
 
-    print(f"[{site['name']}] extracted {len(items)} headlines", file=sys.stderr)
+    dated = sum(1 for it in items if it.get("ts"))
+    print(f"[{site['name']}] extracted {len(items)} headlines "
+          f"({dated} with real timestamp)", file=sys.stderr)
     return items
 
 
