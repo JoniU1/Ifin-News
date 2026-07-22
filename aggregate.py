@@ -112,7 +112,9 @@ def scrape_site(page, site):
                 y, mo, d = map(int, dm.groups())
                 hh, mm = (int(tm.group(1)), int(tm.group(2))) if tm else (12, 0)
                 try:
-                    item["ts"] = dt.datetime(y, mo, d, hh, mm, tzinfo=dt.timezone.utc)
+                    # page shows Israel local time -> convert to UTC (-3)
+                    il_dt = dt.datetime(y, mo, d, hh, mm) - dt.timedelta(hours=3)
+                    item["ts"] = il_dt.replace(tzinfo=dt.timezone.utc)
                 except ValueError:
                     pass
 
@@ -123,7 +125,9 @@ def scrape_site(page, site):
                 d, mo, y = map(int, dmatch.groups())
                 try:
                     hh, mm = (int(tmatch.group(1)), int(tmatch.group(2))) if tmatch else (12, 0)
-                    item["ts"] = dt.datetime(y, mo, d, hh, mm, tzinfo=dt.timezone.utc)
+                    # page shows Israel local time -> convert to UTC (-3)
+                    il_dt = dt.datetime(y, mo, d, hh, mm) - dt.timedelta(hours=3)
+                    item["ts"] = il_dt.replace(tzinfo=dt.timezone.utc)
                 except ValueError:
                     pass
             elif tmatch:
@@ -240,7 +244,12 @@ def write_html(items, now):
     rows = []
     for it in items:
         color = SITE_COLORS.get(it["source"], "#666")
-        t = (it["sort_dt"] + dt.timedelta(hours=3)).strftime("%H:%M")
+        # Show a real clock time only when we actually parsed one.
+        # Globes (and any proxy-ranked item) has no true time -> show a dash.
+        if it.get("ts"):
+            t = (it["ts"] + dt.timedelta(hours=3)).strftime("%H:%M")
+        else:
+            t = "—"
         title = html.escape(it["title"])
         rows.append(
             f'<a class="item" data-src="{it["source"]}" '
