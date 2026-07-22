@@ -72,16 +72,28 @@ def scrape_site(page, site):
         pass
 
     # For each matching link, grab its href, text, AND the text of a nearby
-    # container (row/card) so we can read the date/time shown beside it.
+    # container so we can read the date/time shown beside it. Some sites
+    # (Calcalist) put the time in a sibling/further ancestor, so climb until
+    # the container is clearly larger than the headline, then also fold in
+    # the previous/next sibling text to catch times placed alongside.
     anchors = page.eval_on_selector_all(
         "a[href]",
         """els => els.map(e => {
             let ctx = e;
-            for (let i = 0; i < 4 && ctx.parentElement; i++) {
+            for (let i = 0; i < 6 && ctx.parentElement; i++) {
                 ctx = ctx.parentElement;
-                if (ctx.innerText && ctx.innerText.length > e.innerText.length + 3) break;
+                // stop once the block is substantially bigger than the link text
+                if (ctx.innerText && ctx.innerText.length > e.innerText.length + 8) break;
             }
-            return {href: e.href, text: e.innerText, ctx: ctx ? ctx.innerText : ""};
+            let extra = "";
+            try {
+                if (ctx.previousElementSibling) extra += " " + ctx.previousElementSibling.innerText;
+                if (ctx.nextElementSibling)     extra += " " + ctx.nextElementSibling.innerText;
+                if (e.previousElementSibling)   extra += " " + e.previousElementSibling.innerText;
+                if (e.nextElementSibling)       extra += " " + e.nextElementSibling.innerText;
+            } catch (err) {}
+            return {href: e.href, text: e.innerText,
+                    ctx: (ctx ? ctx.innerText : "") + extra};
         })"""
     )
 
