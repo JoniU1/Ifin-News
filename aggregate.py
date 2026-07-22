@@ -1,24 +1,18 @@
 #!/usr/bin/env python3
 """
-Aggregates headlines from four Israeli financial news sites into one RSS feed.
+Aggregates headlines from four Israeli financial news sites into one RSS feed
+AND a browser reading page (index.html), sorted newest-first across all sites.
 
-Sources:
-  - Calcalist   (https://www.calcalist.co.il/allnews)
-  - Bizportal   (https://www.bizportal.co.il/todays_headlines)
-  - Globes      (https://www.globes.co.il/news/home.aspx?fid=9473)
-  - TheMarker   (https://www.themarker.com/misc/all-headlines)
+Sources: Calcalist, Bizportal, Globes, TheMarker.
 
-Output: feed.xml  (RSS 2.0), plus index.html landing page.
-
-Design notes:
-  - Each site has its own parser. If one site changes layout or blocks the
-    request, the others still work and the run still succeeds (errors are
-    caught per-site and logged, not fatal).
-  - Two request strategies are tried per site: a normal requests call, and
-    (if that 403s) a cloudscraper call that mimics a browser more closely.
-    This handles the "cloud IP gets blocked" risk without a headless browser.
+Recency signals (best available per site):
+  - TheMarker: date in URL (/YYYY-MM-DD/) + displayed HH:MM  -> real datetime
+  - Globes:    numeric did=NNN in URL (rises over time)      -> recency proxy
+  - Bizportal: position on page (page is newest-first)       -> recency proxy
+  - Calcalist: position on page (via proxy markdown)         -> recency proxy
 """
 
+import re
 import sys
 import time
 import html
@@ -37,18 +31,15 @@ except Exception:
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
-
 HEADERS = {
     "User-Agent": UA,
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "he-IL,he;q=0.9,en;q=0.8",
 }
-
 TIMEOUT = 25
 
 
 def fetch(url):
-    """Fetch a URL. Try plain requests first; if blocked, try cloudscraper."""
     try:
         r = requests.get(url, headers=HEADERS, timeout=TIMEOUT)
         if r.status_code == 200 and len(r.text) > 2000:
@@ -62,8 +53,7 @@ def fetch(url):
     if _HAVE_CLOUDSCRAPER:
         try:
             scraper = cloudscraper.create_scraper(
-                browser={"browser": "chrome", "platform": "windows", "mobile": False}
-            )
+                browser={"browser": "chrome", "platform": "windows", "mobile": False})
             r = scraper.get(url, timeout=TIMEOUT)
             if r.status_code == 200:
                 r.encoding = r.apparent_encoding or "utf-8"
@@ -72,8 +62,6 @@ def fetch(url):
         except Exception as e:
             print(f"    cloudscraper error: {e}", file=sys.stderr)
 
-    # Last resort: free reader proxy for sites that block datacenter IPs.
-    # Returns Markdown, not HTML — parsers must handle the PROXY_MD:: marker.
     try:
         proxied = "https://r.jina.ai/" + url
         r = requests.get(proxied, headers={"User-Agent": UA}, timeout=45)
@@ -92,10 +80,6 @@ def clean(text):
     return html.unescape(" ".join(text.split())).strip()
 
 
-# ---------------------------------------------------------------------------
-# Per-site parsers. Each returns a list of dicts: {title, link, summary, source}
-# ---------------------------------------------------------------------------
-
 def parse_bizportal(html_text, base):
     soup = BeautifulSoup(html_text, "lxml")
     items, seen = [], set()
@@ -104,22 +88,19 @@ def parse_bizportal(html_text, base):
         if "/news/article/" not in href:
             continue
         title = clean(a.get_text())
-        if len(title) < 15:          # skip image-only / label links
+        if len(title) < 15:
             continue
         link = urljoin(base, href)
         if link in seen:
             continue
         seen.add(link)
-        items.append({"title": title, "link": link, "summary": "",
-                      "source": "Bizportal"})
+        items.append({"title": title, "link": link, "source": "Bizportal",
+                      "ts": None, "order": len(items)})
     return items
 
 
 def parse_calcalist(html_text, base):
-    import re
     items, seen = [], set()
-
-    # Case 1: proxy returned Markdown — extract [title](link) pairs
     if html_text.startswith("PROXY_MD::"):
         md = html_text[len("PROXY_MD::"):]
         for m in re.finditer(r"\[([^\]]+)\]\((https?://[^)]*?/article/[^)]+)\)", md):
@@ -128,11 +109,10 @@ def parse_calcalist(html_text, base):
             if len(title) < 15 or link in seen:
                 continue
             seen.add(link)
-            items.append({"title": title, "link": link, "summary": "",
-                          "source": "Calcalist"})
+            items.append({"title": title, "link": link, "source": "Calcalist",
+                          "ts": None, "order": len(items)})
         return items
 
-    # Case 2: normal HTML
     soup = BeautifulSoup(html_text, "lxml")
     for a in soup.find_all("a", href=True):
         href = a["href"]
@@ -145,8 +125,8 @@ def parse_calcalist(html_text, base):
         if link in seen:
             continue
         seen.add(link)
-        items.append({"title": title, "link": link, "summary": "",
-                      "source": "Calcalist"})
+        items.append({"title": title, "link": link, "source": "Calcalist",
+                      "ts": None, "order": len(items)})
     return items
 
 
@@ -164,15 +144,16 @@ def parse_globes(html_text, base):
         if link in seen:
             continue
         seen.add(link)
-        items.append({"title": title, "link": link, "summary": "",
-                      "source": "Globes"})
+        m = re.search(r"did=(\d+)", href)
+        did = int(m.group(1)) if m else 0
+        items.append({"title": title, "link": link, "source": "Globes",
+                      "ts": None, "order": len(items), "_did": did})
     return items
 
 
 def parse_themarker(html_text, base):
     soup = BeautifulSoup(html_text, "lxml")
     items, seen = [], set()
-    # TheMarker headlines sit in <h3> tags wrapping an <a>
     for h in soup.find_all(["h3", "h2"]):
         a = h.find("a", href=True)
         if not a:
@@ -187,8 +168,22 @@ def parse_themarker(html_text, base):
         if link in seen:
             continue
         seen.add(link)
-        items.append({"title": title, "link": link, "summary": "",
-                      "source": "TheMarker"})
+        ts = None
+        dm = re.search(r"/(\d{4})-(\d{2})-(\d{2})/", href)
+        block_text = ""
+        parent = h.find_parent()
+        if parent:
+            block_text = parent.get_text(" ", strip=True)
+        tm = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", block_text)
+        if dm:
+            y, mo, d = int(dm.group(1)), int(dm.group(2)), int(dm.group(3))
+            hh, mm = (int(tm.group(1)), int(tm.group(2))) if tm else (12, 0)
+            try:
+                ts = dt.datetime(y, mo, d, hh, mm, tzinfo=dt.timezone.utc)
+            except ValueError:
+                ts = None
+        items.append({"title": title, "link": link, "source": "TheMarker",
+                      "ts": ts, "order": len(items)})
     return items
 
 
@@ -200,14 +195,34 @@ SOURCES = [
 ]
 
 
+def assign_ranks(items):
+    now = dt.datetime.now(dt.timezone.utc)
+    dids = [it["_did"] for it in items if it["source"] == "Globes" and "_did" in it]
+    dmin, dmax = (min(dids), max(dids)) if dids else (0, 1)
+    counts = {}
+    for it in items:
+        counts[it["source"]] = max(counts.get(it["source"], 0), it["order"] + 1)
+    for it in items:
+        src = it["source"]
+        if it.get("ts"):
+            it["sort_dt"] = it["ts"]
+        elif src == "Globes" and dmax > dmin:
+            frac = (it["_did"] - dmin) / (dmax - dmin)
+            it["sort_dt"] = now - dt.timedelta(hours=12 * (1 - frac))
+        else:
+            n = counts.get(src, 1)
+            frac = 1 - (it["order"] / max(n, 1))
+            it["sort_dt"] = now - dt.timedelta(hours=12 * (1 - frac))
+    return items
+
+
 def main():
     all_items = []
     for name, url, parser in SOURCES:
         print(f"[{name}] fetching {url}")
         page = fetch(url)
         if not page:
-            print(f"[{name}] FAILED to fetch (site may block cloud IPs). Skipping.",
-                  file=sys.stderr)
+            print(f"[{name}] FAILED to fetch. Skipping.", file=sys.stderr)
             continue
         try:
             got = parser(page, url)
@@ -217,7 +232,6 @@ def main():
             print(f"[{name}] parse error: {e}", file=sys.stderr)
         time.sleep(1)
 
-    # Deduplicate across sources by link
     seen, deduped = set(), []
     for it in all_items:
         if it["link"] in seen:
@@ -225,48 +239,95 @@ def main():
         seen.add(it["link"])
         deduped.append(it)
 
-    print(f"TOTAL: {len(deduped)} unique headlines")
+    assign_ranks(deduped)
+    deduped.sort(key=lambda it: it["sort_dt"], reverse=True)
+    print(f"TOTAL: {len(deduped)} unique headlines (sorted newest-first)")
 
-    # Build RSS
+    now = dt.datetime.now(dt.timezone.utc)
+
     fg = FeedGenerator()
     fg.title("חדשות כלכלה — Israeli Finance Aggregator")
     fg.link(href="https://example.github.io/israeli-finance-feed/feed.xml", rel="self")
     fg.description("Combined headlines: Calcalist, Bizportal, Globes, TheMarker")
     fg.language("he")
-    now = dt.datetime.now(dt.timezone.utc)
     fg.lastBuildDate(now)
-
-    # feedgen prepends entries in reverse, so add in reverse to keep order
     for it in reversed(deduped):
         fe = fg.add_entry()
         fe.title(f"[{it['source']}] {it['title']}")
         fe.link(href=it["link"])
         fe.guid(it["link"], permalink=True)
-        if it["summary"]:
-            fe.description(it["summary"])
-        else:
-            fe.description(it["title"])
-        fe.pubDate(now)
-
+        fe.description(it["title"])
+        fe.pubDate(it["sort_dt"])
     fg.rss_file("feed.xml", pretty=True)
     print("Wrote feed.xml")
 
-    # Minimal landing page
-    with open("index.html", "w", encoding="utf-8") as f:
-        f.write(f"""<!doctype html><html lang="he" dir="rtl"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Israeli Finance Feed</title></head><body style="font-family:sans-serif;max-width:640px;margin:2rem auto;padding:0 1rem">
-<h1>מצרף חדשות כלכלה</h1>
-<p>פיד RSS מאוחד: כלכליסט, ביזפורטל, גלובס, דה־מרקר.</p>
-<p>כתובת הפיד להוספה לקורא RSS:</p>
-<p><a href="feed.xml">feed.xml</a></p>
-<p>עודכן לאחרונה: {now.strftime('%Y-%m-%d %H:%M UTC')} — {len(deduped)} כותרות</p>
-</body></html>""")
+    write_html(deduped, now)
     print("Wrote index.html")
 
     if len(deduped) == 0:
         print("WARNING: zero headlines — all sources failed.", file=sys.stderr)
         sys.exit(1)
+
+
+SITE_COLORS = {
+    "Calcalist": "#c8102e",
+    "Bizportal": "#0a6cff",
+    "Globes":    "#e67e00",
+    "TheMarker": "#00875a",
+}
+
+
+def write_html(items, now):
+    il = now + dt.timedelta(hours=3)
+    rows = []
+    for it in items:
+        color = SITE_COLORS.get(it["source"], "#666")
+        t = it["sort_dt"] + dt.timedelta(hours=3)
+        tstr = t.strftime("%H:%M")
+        title = html.escape(it["title"])
+        rows.append(
+            f'<a class="item" href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
+            f'<span class="tag" style="background:{color}">{it["source"]}</span>'
+            f'<span class="ttl">{title}</span>'
+            f'<span class="tm">{tstr}</span></a>'
+        )
+    body = "\n".join(rows)
+    doc = f"""<!doctype html><html lang="he" dir="rtl"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>מצרף חדשות כלכלה</title>
+<style>
+  :root {{ color-scheme: light dark; }}
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+         max-width: 780px; margin: 0 auto; padding: 1rem;
+         background: #fafafa; color: #111; }}
+  @media (prefers-color-scheme: dark) {{
+    body {{ background: #16181c; color: #eee; }}
+    .item {{ border-color: #2a2d33 !important; }}
+    .item:hover {{ background: #1e2127 !important; }}
+  }}
+  h1 {{ font-size: 1.3rem; margin: .3rem 0; }}
+  .sub {{ color: #888; font-size: .8rem; margin-bottom: 1rem; }}
+  .item {{ display: flex; align-items: center; gap: .6rem;
+          text-decoration: none; color: inherit;
+          padding: .7rem .5rem; border-bottom: 1px solid #e5e5e5; }}
+  .item:hover {{ background: #f0f0f0; }}
+  .tag {{ flex: 0 0 auto; color: #fff; font-size: .68rem; font-weight: 600;
+         padding: .12rem .45rem; border-radius: 4px; min-width: 62px;
+         text-align: center; }}
+  .ttl {{ flex: 1 1 auto; font-size: .95rem; line-height: 1.35; }}
+  .tm {{ flex: 0 0 auto; color: #999; font-size: .72rem;
+        font-variant-numeric: tabular-nums; }}
+</style></head>
+<body>
+<h1>מצרף חדשות כלכלה</h1>
+<div class="sub">כלכליסט · ביזפורטל · גלובס · דה־מרקר — {len(items)} כותרות ·
+עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) ·
+<a href="feed.xml">RSS</a></div>
+{body}
+</body></html>"""
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(doc)
 
 
 if __name__ == "__main__":
