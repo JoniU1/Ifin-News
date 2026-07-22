@@ -54,6 +54,109 @@ def clean(t):
     return html.unescape(" ".join(t.split())).strip()
 
 
+def scrape_calcalist(page, site):
+    """
+    Calcalist has a precise structure (confirmed via DevTools):
+      <div class="dayHeader">22.07.26 (היום)</div>
+      <div class="item">
+        <span class="date">16:00</span>
+        <div class="textDiv"><a class="itemTitle" href=".../article/..">TITLE</a></div>
+      </div>
+    We walk the feed in document order, tracking the current day from dayHeader,
+    and read each item's .date (HH:MM or a date) + .itemTitle. This ignores the
+    "most viewed" block, which is not built from .item/.dayHeader rows.
+    """
+    now = dt.datetime.now(dt.timezone.utc)
+    today_il = (now + dt.timedelta(hours=3)).date()
+
+    print(f"[Calcalist] loading {site['url']}", file=sys.stderr)
+    try:
+        page.goto(site["url"], wait_until="domcontentloaded", timeout=45000)
+    except Exception as e:
+        print(f"[Calcalist] goto error: {e}", file=sys.stderr)
+        return []
+    page.wait_for_timeout(3500)
+    try:
+        for _ in range(3):
+            page.mouse.wheel(0, 4000)
+            page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+    rows = page.eval_on_selector_all(
+        ".dayHeader, .item",
+        """els => els.map(e => {
+            if (e.classList.contains('dayHeader')) {
+                return {kind: 'day', text: e.innerText};
+            }
+            const a = e.querySelector('a.itemTitle') || e.querySelector('a[href*="/article/"]');
+            const d = e.querySelector('.date');
+            return {
+                kind: 'item',
+                href: a ? a.href : '',
+                title: a ? a.innerText : '',
+                date: d ? d.innerText : ''
+            };
+        })"""
+    )
+
+    items, seen = [], set()
+    cur_date = today_il  # default until we see a dayHeader
+    for r in rows:
+        if r.get("kind") == "day":
+            # dayHeader like "יום רביעי 22.07.26 (היום)"
+            dm = re.search(r"(\d{2})\.(\d{2})\.(\d{2})", r.get("text", ""))
+            if dm:
+                d, mo, yy = map(int, dm.groups())
+                try:
+                    cur_date = dt.date(2000 + yy, mo, d)
+                except ValueError:
+                    pass
+            continue
+
+        href = r.get("href") or ""
+        if "/article/" not in href:
+            continue
+        title = clean(r.get("title"))
+        if len(title) < site["min_title"]:
+            continue
+        link = href.split("#")[0]
+        if link in seen:
+            continue
+        seen.add(link)
+
+        ts = None
+        dtext = r.get("date") or ""
+        tmatch = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", dtext)
+        dmatch = re.search(r"\b(\d{2})[./](\d{2})[./](\d{2,4})\b", dtext)
+        if tmatch:
+            hh, mm = int(tmatch.group(1)), int(tmatch.group(2))
+            try:
+                il_dt = dt.datetime(cur_date.year, cur_date.month, cur_date.day,
+                                    hh, mm) - dt.timedelta(hours=3)
+                ts = il_dt.replace(tzinfo=dt.timezone.utc)
+            except ValueError:
+                pass
+        elif dmatch:
+            d, mo, yy = dmatch.groups()
+            d, mo = int(d), int(mo)
+            yy = int(yy)
+            yy = yy + 2000 if yy < 100 else yy
+            try:
+                il_dt = dt.datetime(yy, mo, d, 12, 0) - dt.timedelta(hours=3)
+                ts = il_dt.replace(tzinfo=dt.timezone.utc)
+            except ValueError:
+                pass
+
+        items.append({"title": title, "link": link, "source": "Calcalist",
+                      "ts": ts, "order": len(items)})
+
+    dated = sum(1 for it in items if it.get("ts"))
+    print(f"[Calcalist] extracted {len(items)} headlines "
+          f"({dated} with real timestamp) [structured]", file=sys.stderr)
+    return items
+
+
 def scrape_site(page, site):
     """Render the site and return list of {title, link, source, ts, order}."""
     print(f"[{site['name']}] loading {site['url']}", file=sys.stderr)
@@ -158,6 +261,19 @@ def scrape_site(page, site):
         items.append(item)
 
     dated = sum(1 for it in items if it.get("ts"))
+
+    # Calcalist-specific: the "most viewed" block (old popular articles) renders
+    # near the top without the live feed's time label. If timestamp parsing is
+    # working for a decent share of items, keep ONLY timestamped ones so the
+    # undated featured block can't float to the top. If parsing mostly failed
+    # (dated very low), keep everything rather than emptying the source.
+    if site["name"] == "Calcalist" and len(items) > 0:
+        share = dated / len(items)
+        if share >= 0.4:
+            before = len(items)
+            items = [it for it in items if it.get("ts")]
+            print(f"[Calcalist] dropped {before - len(items)} undated "
+                  f"(most-viewed) items", file=sys.stderr)
     print(f"[{site['name']}] extracted {len(items)} headlines "
           f"({dated} with real timestamp)", file=sys.stderr)
     return items
@@ -197,7 +313,10 @@ def main():
         page = ctx.new_page()
         for site in SITES:
             try:
-                all_items.extend(scrape_site(page, site))
+                if site["name"] == "Calcalist":
+                    all_items.extend(scrape_calcalist(page, site))
+                else:
+                    all_items.extend(scrape_site(page, site))
             except Exception as e:
                 print(f"[{site['name']}] scrape error: {e}", file=sys.stderr)
         browser.close()
