@@ -154,6 +154,18 @@ def scrape_globes(page, site):
     dated = sum(1 for it in items if it.get("ts"))
     print(f"[Globes] extracted {len(items)} headlines "
           f"({dated} with real timestamp) [structured]", file=sys.stderr)
+
+    # Safety net: if the structured selector found almost nothing, fall back to
+    # the generic scraper (which previously returned ~82 Globes articles).
+    if len(items) < 5:
+        print("[Globes] structured found too few; falling back to generic",
+              file=sys.stderr)
+        try:
+            fallback = scrape_site(page, site)
+            if len(fallback) > len(items):
+                return fallback
+        except Exception as e:
+            print(f"[Globes] fallback error: {e}", file=sys.stderr)
     return items
 
 
