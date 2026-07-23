@@ -81,9 +81,15 @@ def scrape_globes(page, site):
     except Exception as e:
         print(f"[Globes] goto error: {e}", file=sys.stderr)
         return []
-    page.wait_for_timeout(3500)
+    # Wait for the JS-built article list to actually appear (up to 20s),
+    # rather than guessing with a fixed delay.
     try:
-        for _ in range(3):
+        page.wait_for_selector(".itemP", timeout=20000)
+    except Exception:
+        print("[Globes] .itemP never appeared within 20s", file=sys.stderr)
+    page.wait_for_timeout(1500)
+    try:
+        for _ in range(4):
             page.mouse.wheel(0, 4000)
             page.wait_for_timeout(800)
     except Exception:
@@ -95,7 +101,10 @@ def scrape_globes(page, site):
             if (e.classList.contains('newsTitle')) {
                 return {kind: 'day', text: e.innerText};
             }
-            const a = e.querySelector('a[href*="did="]');
+            // an .itemP may have two did= links: a thumbnail (class "im", no
+            // text) and the headline link (has text). Prefer the one with text.
+            const links = Array.from(e.querySelectorAll('a[href*="did="]'));
+            let a = links.find(l => (l.innerText || '').trim().length > 10) || links[0];
             const info = e.querySelector('.info');
             return {
                 kind: 'item',
