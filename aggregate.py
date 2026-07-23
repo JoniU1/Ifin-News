@@ -54,6 +54,109 @@ def clean(t):
     return html.unescape(" ".join(t.split())).strip()
 
 
+def scrape_globes(page, site):
+    """
+    Globes structure (confirmed via DevTools):
+      <div class="AllDayleNews">
+        <h2 class="newsTitle">יום רביעי 22 יולי 2026</h2>   day header
+        <div class="itemP">
+          <h2><span class="info">16:30</span>
+              <a href="/news/article.aspx?did=NNN">TITLE</a></h2>
+        </div>
+      </div>
+    We read each .itemP: its .info time + the did link, dating it from the most
+    recent .newsTitle day header above it.
+    """
+    HEB_MONTHS = {
+        "ינואר": 1, "פברואר": 2, "מרץ": 3, "מרס": 3, "אפריל": 4, "מאי": 5,
+        "יוני": 6, "יולי": 7, "אוגוסט": 8, "ספטמבר": 9, "אוקטובר": 10,
+        "נובמבר": 11, "דצמבר": 12,
+    }
+    now = dt.datetime.now(dt.timezone.utc)
+    today_il = (now + dt.timedelta(hours=3)).date()
+
+    print(f"[Globes] loading {site['url']}", file=sys.stderr)
+    try:
+        page.goto(site["url"], wait_until="domcontentloaded", timeout=45000)
+    except Exception as e:
+        print(f"[Globes] goto error: {e}", file=sys.stderr)
+        return []
+    page.wait_for_timeout(3500)
+    try:
+        for _ in range(3):
+            page.mouse.wheel(0, 4000)
+            page.wait_for_timeout(800)
+    except Exception:
+        pass
+
+    rows = page.eval_on_selector_all(
+        ".newsTitle, .itemP",
+        """els => els.map(e => {
+            if (e.classList.contains('newsTitle')) {
+                return {kind: 'day', text: e.innerText};
+            }
+            const a = e.querySelector('a[href*="did="]');
+            const info = e.querySelector('.info');
+            return {
+                kind: 'item',
+                href: a ? a.href : '',
+                title: a ? a.innerText : '',
+                info: info ? info.innerText : ''
+            };
+        })"""
+    )
+
+    items, seen = [], set()
+    cur_date = today_il
+    for r in rows:
+        if r.get("kind") == "day":
+            txt = r.get("text", "")
+            dm = re.search(r"(\d{1,2})\s+(\S+)\s+(\d{4})", txt)
+            if dm:
+                d = int(dm.group(1))
+                mo = HEB_MONTHS.get(dm.group(2))
+                y = int(dm.group(3))
+                if mo:
+                    try:
+                        cur_date = dt.date(y, mo, d)
+                    except ValueError:
+                        pass
+            continue
+
+        href = r.get("href") or ""
+        if "did=" not in href:
+            continue
+        title = clean(r.get("title"))
+        if len(title) < site["min_title"]:
+            continue
+        link = href.split("#")[0]
+        if link in seen:
+            continue
+        seen.add(link)
+
+        ts = None
+        info = r.get("info") or ""
+        tmatch = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", info)
+        if tmatch:
+            hh, mm = int(tmatch.group(1)), int(tmatch.group(2))
+            try:
+                il_dt = dt.datetime(cur_date.year, cur_date.month, cur_date.day,
+                                    hh, mm) - dt.timedelta(hours=3)
+                ts = il_dt.replace(tzinfo=dt.timezone.utc)
+            except ValueError:
+                pass
+
+        m = re.search(r"did=(\d+)", href)
+        item = {"title": title, "link": link, "source": "Globes",
+                "ts": ts, "order": len(items), "_did": int(m.group(1)) if m else 0}
+        items.append(item)
+
+    dated = sum(1 for it in items if it.get("ts"))
+    print(f"[Globes] extracted {len(items)} headlines "
+          f"({dated} with real timestamp) [structured]", file=sys.stderr)
+    return items
+
+
 def scrape_calcalist(page, site):
     """
     Calcalist has a precise structure (confirmed via DevTools):
@@ -315,6 +418,8 @@ def main():
             try:
                 if site["name"] == "Calcalist":
                     all_items.extend(scrape_calcalist(page, site))
+                elif site["name"] == "Globes":
+                    all_items.extend(scrape_globes(page, site))
                 else:
                     all_items.extend(scrape_site(page, site))
             except Exception as e:
