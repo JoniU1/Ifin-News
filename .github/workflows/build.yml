@@ -2,13 +2,15 @@ name: Build feed
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    - cron: "*/30 * * * *"
   workflow_dispatch:
   push:
     branches: [ main ]
+    paths-ignore:
+      - '.keepalive'
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -38,6 +40,19 @@ jobs:
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
+      - name: Keep-alive (only on the 1st of each month)
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H%M)" \< "0030" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            date -u > .keepalive
+            git add .keepalive
+            git commit -m "keep-alive" || echo "nothing to commit"
+            git push || echo "push skipped"
+          else
+            echo "not keep-alive window, skipping"
+          fi
 
   deploy:
     needs: build
