@@ -275,6 +275,12 @@ def scrape_calcalist(page, site):
         items.append({"title": title, "link": link, "source": "Calcalist",
                       "ts": ts, "order": len(items)})
 
+        # TEMP DEBUG: show raw date text vs parsed, for first 5 items
+        if len([1 for _ in items]) <= 5:
+            disp = (ts + dt.timedelta(hours=3)).strftime("%H:%M") if ts else "—"
+            print(f"[Calcalist DEBUG] raw_date='{dtext}' -> displays {disp} "
+                  f"| title={title[:30]}", file=sys.stderr)
+
     dated = sum(1 for it in items if it.get("ts"))
     print(f"[Calcalist] extracted {len(items)} headlines "
           f"({dated} with real timestamp) [structured]", file=sys.stderr)
@@ -429,6 +435,7 @@ def main():
         browser = p.chromium.launch(args=["--no-sandbox"])
         ctx = browser.new_context(
             locale="he-IL",
+            timezone_id="Asia/Jerusalem",
             user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                         "AppleWebKit/537.36 (KHTML, like Gecko) "
                         "Chrome/122.0 Safari/537.36"),
