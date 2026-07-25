@@ -24,9 +24,7 @@ from playwright.sync_api import sync_playwright
 # ---- WSJ official RSS feeds (section -> URL) ----
 WSJ_FEEDS = {
     "Markets":     "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
-    "World":       "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
     "Business":    "https://feeds.content.dowjones.io/public/rss/WSJcomUSBusiness",
-    "Tech":        "https://feeds.content.dowjones.io/public/rss/RSSWSJD",
     "Real Estate": "https://feeds.content.dowjones.io/public/rss/latestnewsrealestate",
 }
 
@@ -167,7 +165,7 @@ def main():
     fg = FeedGenerator()
     fg.title("English Finance Aggregator — WSJ & Barron's")
     fg.link(href="https://example.github.io/Ifin-News/en/feed.xml", rel="self")
-    fg.description("Combined: WSJ (Markets, World, Business, Tech, Real Estate) + Barron's")
+    fg.description("Combined: WSJ (Markets, Business, Real Estate) + Barron's")
     fg.language("en")
     fg.lastBuildDate(now)
     for it in reversed(deduped):
