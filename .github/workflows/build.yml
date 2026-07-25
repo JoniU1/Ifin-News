@@ -21,6 +21,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -30,36 +31,14 @@ jobs:
         run: |
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
-      - name: Run aggregator
+      - name: Run Hebrew aggregator
         run: python aggregate.py
+      - name: Run English aggregator
+        run: python aggregate_en.py || echo "English aggregator failed (non-fatal)"
       - name: Prepare site directory
         run: |
-          mkdir -p _site
+          mkdir -p _site/en
           cp feed.xml _site/feed.xml
           cp index.html _site/index.html
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: _site
-      - name: Keep-alive (only on the 1st of each month)
-        if: github.event_name == 'schedule'
-        run: |
-          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H%M)" \< "0030" ]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            date -u > .keepalive
-            git add .keepalive
-            git commit -m "keep-alive" || echo "nothing to commit"
-            git push || echo "push skipped"
-          else
-            echo "not keep-alive window, skipping"
-          fi
-
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+          if [ -f en.html ]; then cp en.html _site/en/index.html; fi
+          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en/feed.xml; fi
