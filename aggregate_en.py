@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-English finance news aggregator (Bloomberg, WSJ, Barron's) — headless browser.
+English finance news aggregator — WSJ (official RSS) + Barron's (browser scrape).
 
 Writes en-feed.xml and en.html (separate from the Hebrew feed).
 
-HONEST NOTE: these three sites have strong anti-bot protection and paywalls.
-This is an experiment to see empirically what loads from GitHub's servers.
-Each site is wrapped so one failing doesn't kill the others, and the log
-reports exactly how many headlines each yielded.
+Empirical findings (2026-07): Bloomberg hard-blocks scrapers (CAPTCHA) and has
+no public RSS, so it's dropped. WSJ blocks scraping but publishes official RSS
+feeds, so we use those. Barron's scrape works, so we keep it.
 
-Extraction is by stable URL patterns (article URL shapes), since we can't
-assume CSS class structure. Timestamps are best-effort.
+WSJ pulls multiple sections including Real Estate. Barron's is rendered with a
+headless browser and extracted by article-URL pattern.
 """
 
 import re
@@ -18,23 +17,28 @@ import sys
 import html
 import datetime as dt
 
+import feedparser
 from feedgen.feed import FeedGenerator
 from playwright.sync_api import sync_playwright
 
-SITES = [
-    {"name": "Bloomberg",
-     "url": "https://www.bloomberg.com/latest",
-     "pattern": r"bloomberg\.com/news/(articles|features)/[0-9]{4}-[0-9]{2}-[0-9]{2}/",
-     "min_title": 15},
-    {"name": "WSJ",
-     "url": "https://www.wsj.com/news/latest-headlines",
-     "pattern": r"wsj\.com/(articles|finance|economy|business|world|tech|markets)[/A-Za-z0-9\-]*",
-     "min_title": 15},
-    {"name": "Barron's",
-     "url": "https://www.barrons.com/real-time",
-     "pattern": r"barrons\.com/articles/[A-Za-z0-9\-]+",
-     "min_title": 15},
-]
+# ---- WSJ official RSS feeds (section -> URL) ----
+WSJ_FEEDS = {
+    "Markets":     "https://feeds.content.dowjones.io/public/rss/RSSMarketsMain",
+    "World":       "https://feeds.content.dowjones.io/public/rss/RSSWorldNews",
+    "Business":    "https://feeds.content.dowjones.io/public/rss/WSJcomUSBusiness",
+    "Tech":        "https://feeds.content.dowjones.io/public/rss/RSSWSJD",
+    "Real Estate": "https://feeds.content.dowjones.io/public/rss/latestnewsrealestate",
+}
+
+BARRONS = {
+    "name": "Barron's",
+    "url": "https://www.barrons.com/real-time",
+    "pattern": r"barrons\.com/articles/[A-Za-z0-9\-]+",
+    "min_title": 15,
+}
+
+UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+      "(KHTML, like Gecko) Chrome/122.0 Safari/537.36")
 
 
 def clean(t):
@@ -43,46 +47,61 @@ def clean(t):
     return html.unescape(" ".join(t.split())).strip()
 
 
-def scrape_site(page, site):
-    print(f"[{site['name']}] loading {site['url']}", file=sys.stderr)
+def fetch_wsj():
+    """Pull all WSJ section feeds via RSS. Returns list of item dicts."""
+    items, seen = [], set()
+    for section, url in WSJ_FEEDS.items():
+        print(f"[WSJ/{section}] fetching {url}", file=sys.stderr)
+        try:
+            # feedparser fetches and parses; set a UA to be safe
+            fp = feedparser.parse(url, request_headers={"User-Agent": UA})
+            n = 0
+            for e in fp.entries:
+                title = clean(e.get("title"))
+                link = (e.get("link") or "").split("#")[0]
+                if len(title) < 12 or not link or link in seen:
+                    continue
+                seen.add(link)
+                ts = None
+                if e.get("published_parsed"):
+                    try:
+                        ts = dt.datetime(*e.published_parsed[:6],
+                                         tzinfo=dt.timezone.utc)
+                    except Exception:
+                        ts = None
+                items.append({"title": title, "link": link, "source": "WSJ",
+                              "section": section, "ts": ts, "order": len(items)})
+                n += 1
+            print(f"[WSJ/{section}] {n} items", file=sys.stderr)
+        except Exception as ex:
+            print(f"[WSJ/{section}] error: {ex}", file=sys.stderr)
+    print(f"[WSJ] total {len(items)} items", file=sys.stderr)
+    return items
+
+
+def scrape_barrons(page):
+    site = BARRONS
+    print(f"[Barron's] loading {site['url']}", file=sys.stderr)
     try:
         page.goto(site["url"], wait_until="domcontentloaded", timeout=45000)
     except Exception as e:
-        print(f"[{site['name']}] goto error: {e}", file=sys.stderr)
+        print(f"[Barron's] goto error: {e}", file=sys.stderr)
         return []
-
     page.wait_for_timeout(4000)
-    # Report the page title + a snippet so we can SEE if we hit a block/captcha
-    try:
-        title = page.title()
-        print(f"[{site['name']}] page title: {title!r}", file=sys.stderr)
-    except Exception:
-        pass
-    try:
-        body_sample = page.eval_on_selector("body", "el => el.innerText.slice(0, 200)")
-        oneline = " ".join((body_sample or "").split())
-        print(f"[{site['name']}] body sample: {oneline[:160]!r}", file=sys.stderr)
-    except Exception as e:
-        print(f"[{site['name']}] body sample error: {e}", file=sys.stderr)
-
     try:
         for _ in range(3):
             page.mouse.wheel(0, 4000)
             page.wait_for_timeout(700)
     except Exception:
         pass
-
     try:
         anchors = page.eval_on_selector_all(
-            "a[href]",
-            "els => els.map(e => ({href: e.href, text: e.innerText}))"
-        )
+            "a[href]", "els => els.map(e => ({href: e.href, text: e.innerText}))")
     except Exception as e:
-        print(f"[{site['name']}] anchor read error: {e}", file=sys.stderr)
+        print(f"[Barron's] anchor read error: {e}", file=sys.stderr)
         return []
 
     pat = re.compile(site["pattern"])
-    now = dt.datetime.now(dt.timezone.utc)
     items, seen = [], set()
     for a in anchors:
         href = a.get("href") or ""
@@ -95,18 +114,9 @@ def scrape_site(page, site):
         if link in seen:
             continue
         seen.add(link)
-        ts = None
-        dm = re.search(r"/(\d{4})-(\d{2})-(\d{2})/", href)
-        if dm:
-            y, mo, d = map(int, dm.groups())
-            try:
-                ts = dt.datetime(y, mo, d, 12, 0, tzinfo=dt.timezone.utc)
-            except ValueError:
-                pass
-        items.append({"title": title, "link": link, "source": site["name"],
-                      "ts": ts, "order": len(items)})
-
-    print(f"[{site['name']}] extracted {len(items)} headlines", file=sys.stderr)
+        items.append({"title": title, "link": link, "source": "Barron's",
+                      "section": "", "ts": None, "order": len(items)})
+    print(f"[Barron's] extracted {len(items)} headlines", file=sys.stderr)
     return items
 
 
@@ -126,24 +136,22 @@ def assign_ranks(items):
 
 def main():
     all_items = []
-    with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--no-sandbox"])
-        ctx = browser.new_context(
-            locale="en-US",
-            timezone_id="America/New_York",
-            user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/122.0 Safari/537.36"),
-            viewport={"width": 1280, "height": 1600},
-        )
-        page = ctx.new_page()
-        for site in SITES:
-            try:
-                all_items.extend(scrape_site(page, site))
-            except Exception as e:
-                print(f"[{site['name']}] scrape error: {e}", file=sys.stderr)
-        browser.close()
+    # WSJ via RSS (no browser needed)
+    all_items.extend(fetch_wsj())
+    # Barron's via browser
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(args=["--no-sandbox"])
+            ctx = browser.new_context(
+                locale="en-US", timezone_id="America/New_York",
+                user_agent=UA, viewport={"width": 1280, "height": 1600})
+            page = ctx.new_page()
+            all_items.extend(scrape_barrons(page))
+            browser.close()
+    except Exception as e:
+        print(f"[Barron's] browser error: {e}", file=sys.stderr)
 
+    # Dedup
     seen, deduped = set(), []
     for it in all_items:
         if it["link"] in seen:
@@ -157,14 +165,15 @@ def main():
 
     now = dt.datetime.now(dt.timezone.utc)
     fg = FeedGenerator()
-    fg.title("English Finance Aggregator — Bloomberg, WSJ, Barron's")
-    fg.link(href="https://example.github.io/Ifin-News/en-feed.xml", rel="self")
-    fg.description("Combined: Bloomberg, WSJ, Barron's")
+    fg.title("English Finance Aggregator — WSJ & Barron's")
+    fg.link(href="https://example.github.io/Ifin-News/en/feed.xml", rel="self")
+    fg.description("Combined: WSJ (Markets, World, Business, Tech, Real Estate) + Barron's")
     fg.language("en")
     fg.lastBuildDate(now)
     for it in reversed(deduped):
         fe = fg.add_entry()
-        fe.title(f"[{it['source']}] {it['title']}")
+        label = it["source"] + (f"/{it['section']}" if it.get("section") else "")
+        fe.title(f"[{label}] {it['title']}")
         fe.link(href=it["link"])
         fe.guid(it["link"], permalink=True)
         fe.description(it["title"])
@@ -177,29 +186,29 @@ def main():
 
     from collections import Counter
     c = Counter(it["source"] for it in deduped)
-    for s in ["Bloomberg", "WSJ", "Barron's"]:
+    for s in ["WSJ", "Barron's"]:
         print(f"  {s}: {c.get(s,0)}")
 
 
-SITE_COLORS = {"Bloomberg": "#000000", "WSJ": "#0080c6", "Barron's": "#00625b"}
+SITE_COLORS = {"WSJ": "#0080c6", "Barron's": "#00625b"}
 
 
 def write_html(items, now):
-    il = now
     rows = []
     for it in items:
         color = SITE_COLORS.get(it["source"], "#666")
         t = it["sort_dt"].strftime("%H:%M") if it.get("ts") else "—"
+        label = it["source"] + (f" · {it['section']}" if it.get("section") else "")
         title = html.escape(it["title"])
         rows.append(
             f'<a class="item" data-src="{html.escape(it["source"])}" '
             f'href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
-            f'<span class="tag" style="background:{color}">{html.escape(it["source"])}</span>'
+            f'<span class="tag" style="background:{color}">{html.escape(label)}</span>'
             f'<span class="ttl">{title}</span>'
             f'<span class="tm">{t}</span></a>')
     body = "\n".join(rows)
     btns = ['<button class="fbtn active" data-f="all" onclick="flt(this)">All</button>']
-    for name in ["Bloomberg", "WSJ", "Barron's"]:
+    for name in ["WSJ", "Barron's"]:
         color = SITE_COLORS[name]
         btns.append(
             f'<button class="fbtn" data-f="{html.escape(name)}" onclick="flt(this)" '
@@ -229,14 +238,14 @@ def write_html(items, now):
           color:inherit; padding:.7rem .5rem; border-bottom:1px solid #e5e5e5; }}
   .item:hover {{ background:#f0f0f0; }}
   .item.hide {{ display:none; }}
-  .tag {{ flex:0 0 auto; color:#fff; font-size:.68rem; font-weight:600;
-         padding:.12rem .45rem; border-radius:4px; min-width:70px; text-align:center; }}
+  .tag {{ flex:0 0 auto; color:#fff; font-size:.66rem; font-weight:600;
+         padding:.12rem .45rem; border-radius:4px; min-width:96px; text-align:center; }}
   .ttl {{ flex:1 1 auto; font-size:.95rem; line-height:1.35; }}
   .tm {{ flex:0 0 auto; color:#999; font-size:.72rem; font-variant-numeric:tabular-nums; }}
 </style></head><body>
 <h1>English Finance Aggregator</h1>
-<div class="sub">Bloomberg · WSJ · Barron's — {len(items)} headlines ·
-updated {il.strftime('%d/%m %H:%M')} UTC · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
+<div class="sub">WSJ · Barron's — {len(items)} headlines ·
+updated {now.strftime('%d/%m %H:%M')} UTC · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
 <div class="filters">
 {buttons}
 </div>
