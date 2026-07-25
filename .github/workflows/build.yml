@@ -40,11 +40,9 @@ jobs:
           mkdir -p _site/en
           cp feed.xml _site/feed.xml
           cp index.html _site/index.html
-          if [ -f en.html ]; then cp en.html _site/en/index.html; else echo "MISSING en.html"; fi
-          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en/feed.xml; else echo "MISSING en-feed.xml"; fi
+          if [ -f en.html ]; then cp en.html _site/en/index.html; fi
+          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en/feed.xml; fi
           if [ -f en-feed.xml ]; then cp en-feed.xml _site/en-feed.xml; fi
-          echo "--- _site contents ---"
-          ls -laR _site | head -40
       - uses: actions/upload-pages-artifact@v3
         with:
           path: _site
