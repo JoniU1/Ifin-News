@@ -563,7 +563,7 @@ def write_html(items, now):
 </style></head><body>
 <h1>מצרף חדשות כלכלה</h1>
 <div class="sub">{len(items)} כותרות · עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) ·
-<a href="feed.xml">RSS</a></div>
+<a href="feed.xml">RSS</a> · <a href="en/">English ›</a></div>
 <div class="filters">
 {buttons}
 </div>
