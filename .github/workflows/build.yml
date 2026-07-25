@@ -40,5 +40,34 @@ jobs:
           mkdir -p _site/en
           cp feed.xml _site/feed.xml
           cp index.html _site/index.html
-          if [ -f en.html ]; then cp en.html _site/en/index.html; fi
-          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en/feed.xml; fi
+          if [ -f en.html ]; then cp en.html _site/en/index.html; else echo "MISSING en.html"; fi
+          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en/feed.xml; else echo "MISSING en-feed.xml"; fi
+          if [ -f en-feed.xml ]; then cp en-feed.xml _site/en-feed.xml; fi
+          echo "--- _site contents ---"
+          ls -laR _site | head -40
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - name: Keep-alive (only on the 1st of each month)
+        if: github.event_name == 'schedule'
+        run: |
+          if [ "$(date -u +%d)" = "01" ] && [ "$(date -u +%H%M)" \< "0030" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            date -u > .keepalive
+            git add .keepalive
+            git commit -m "keep-alive" || echo "nothing to commit"
+            git push || echo "push skipped"
+          else
+            echo "not keep-alive window, skipping"
+          fi
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
