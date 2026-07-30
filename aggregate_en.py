@@ -199,7 +199,7 @@ def write_html(items, now):
         label = it["source"] + (f" · {it['section']}" if it.get("section") else "")
         title = html.escape(it["title"])
         rows.append(
-            f'<a class="item" data-src="{html.escape(it["source"])}" '
+            f'<a class="item" data-src="{html.escape(it["source"])}" data-title="{title.lower()}" '
             f'href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
             f'<span class="tag" style="background:{color}">{html.escape(label)}</span>'
             f'<span class="ttl">{title}</span>'
@@ -244,17 +244,27 @@ def write_html(items, now):
 <h1>English Finance Aggregator</h1>
 <div class="sub">WSJ · Barron's — {len(items)} headlines ·
 updated {now.strftime('%d/%m %H:%M')} UTC · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
+<input id="q" type="search" placeholder="Search headlines…" oninput="applyFilters()"
+       style="width:100%;padding:.6rem .8rem;margin-bottom:.7rem;border:1px solid #ccc;
+              border-radius:8px;font-size:.95rem;background:#fff;color:#111;" />
 <div class="filters">
 {buttons}
 </div>
 {body}
 <script>
+var curSrc = 'all';
 function flt(btn) {{
-  var f = btn.getAttribute('data-f');
+  curSrc = btn.getAttribute('data-f');
   document.querySelectorAll('.fbtn').forEach(function(b){{ b.classList.remove('active'); }});
   btn.classList.add('active');
+  applyFilters();
+}}
+function applyFilters() {{
+  var q = (document.getElementById('q').value || '').trim().toLowerCase();
   document.querySelectorAll('.item').forEach(function(it){{
-    if (f === 'all' || it.getAttribute('data-src') === f) it.classList.remove('hide');
+    var okSrc = (curSrc === 'all' || it.getAttribute('data-src') === curSrc);
+    var okQ = (q === '' || (it.getAttribute('data-title') || '').indexOf(q) !== -1);
+    if (okSrc && okQ) it.classList.remove('hide');
     else it.classList.add('hide');
   }});
 }}
