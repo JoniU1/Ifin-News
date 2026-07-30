@@ -516,7 +516,7 @@ def write_html(items, now):
             t = "—"
         title = html.escape(it["title"])
         rows.append(
-            f'<a class="item" data-src="{it["source"]}" '
+            f'<a class="item" data-src="{it["source"]}" data-title="{title.lower()}" '
             f'href="{html.escape(it["link"])}" target="_blank" rel="noopener">'
             f'<span class="tag" style="background:{color}">{it["source"]}</span>'
             f'<span class="ttl">{title}</span>'
@@ -564,17 +564,28 @@ def write_html(items, now):
 <h1>מצרף חדשות כלכלה</h1>
 <div class="sub">{len(items)} כותרות · עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) ·
 <a href="feed.xml">RSS</a> · <a href="en/">English ›</a></div>
+<input id="q" type="search" dir="rtl" placeholder="חיפוש בכותרות…" oninput="applyFilters()"
+       style="width:100%;padding:.6rem .8rem;margin-bottom:.7rem;border:1px solid #ccc;
+              border-radius:8px;font-size:.95rem;background:#fff;color:#111;
+              text-align:right;direction:rtl;" />
 <div class="filters">
 {buttons}
 </div>
 {body}
 <script>
+var curSrc = 'all';
 function flt(btn) {{
-  var f = btn.getAttribute('data-f');
+  curSrc = btn.getAttribute('data-f');
   document.querySelectorAll('.fbtn').forEach(function(b){{ b.classList.remove('active'); }});
   btn.classList.add('active');
+  applyFilters();
+}}
+function applyFilters() {{
+  var q = (document.getElementById('q').value || '').trim().toLowerCase();
   document.querySelectorAll('.item').forEach(function(it){{
-    if (f === 'all' || it.getAttribute('data-src') === f) it.classList.remove('hide');
+    var okSrc = (curSrc === 'all' || it.getAttribute('data-src') === curSrc);
+    var okQ = (q === '' || (it.getAttribute('data-title') || '').indexOf(q) !== -1);
+    if (okSrc && okQ) it.classList.remove('hide');
     else it.classList.add('hide');
   }});
 }}
