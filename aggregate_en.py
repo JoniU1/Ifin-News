@@ -28,6 +28,15 @@ WSJ_FEEDS = {
     "Real Estate": "https://feeds.content.dowjones.io/public/rss/latestnewsrealestate",
 }
 
+# ---- Google News RSS: gets recent articles from sites with no own feed ----
+# Technique: news.google.com/rss/search?q=when:24h+allinurl:<domain>
+# Returns real RSS with timestamps. Used because Barron's publishes no feed
+# and its own pages only expose ~20 links to a scraper.
+GNEWS_FEEDS = {
+    "Barron's": ("https://news.google.com/rss/search"
+                 "?q=when:24h+allinurl:barrons.com&ceid=US:en&hl=en-US&gl=US"),
+}
+
 BARRONS = {
     "name": "Barron's",
     "pattern": r"barrons\.com/articles/[A-Za-z0-9\-]+",
@@ -91,6 +100,43 @@ def fetch_wsj():
         except Exception as ex:
             print(f"[WSJ/{section}] error: {ex}", file=sys.stderr)
     print(f"[WSJ] total {len(items)} items", file=sys.stderr)
+    return items
+
+
+def fetch_gnews():
+    """
+    Pull recent articles via Google News RSS for sources with no own feed.
+    Gives real publish timestamps. Titles arrive as "Headline - Barron's",
+    so we strip the trailing source name.
+    """
+    items = []
+    for source, url in GNEWS_FEEDS.items():
+        print(f"[GNews/{source}] fetching {url}", file=sys.stderr)
+        try:
+            fp = feedparser.parse(url, request_headers={"User-Agent": UA})
+            seen = set()
+            n = 0
+            for e in fp.entries:
+                title = clean(e.get("title"))
+                # strip trailing " - Barron's" / " - Barrons" style suffix
+                title = re.sub(r"\s+-\s+[^-]{2,30}$", "", title).strip()
+                link = (e.get("link") or "").split("#")[0]
+                if len(title) < 12 or not link or link in seen:
+                    continue
+                seen.add(link)
+                ts = None
+                if e.get("published_parsed"):
+                    try:
+                        ts = dt.datetime(*e.published_parsed[:6],
+                                         tzinfo=dt.timezone.utc)
+                    except Exception:
+                        ts = None
+                items.append({"title": title, "link": link, "source": source,
+                              "section": "", "ts": ts, "order": len(items)})
+                n += 1
+            print(f"[GNews/{source}] {n} items", file=sys.stderr)
+        except Exception as ex:
+            print(f"[GNews/{source}] error: {ex}", file=sys.stderr)
     return items
 
 
@@ -256,6 +302,8 @@ def main():
     all_items = []
     # WSJ via RSS (no browser needed)
     all_items.extend(fetch_wsj())
+    # Barron's via Google News RSS (last 24h) — its own site has no feed
+    all_items.extend(fetch_gnews())
     # Barron's via browser
     try:
         with sync_playwright() as p:
@@ -269,12 +317,16 @@ def main():
     except Exception as e:
         print(f"[Barron's] browser error: {e}", file=sys.stderr)
 
-    # Dedup
-    seen, deduped = set(), []
+    # Dedup by link AND by normalized title (Google News links differ from
+    # direct barrons.com links for the same article)
+    seen, seen_titles, deduped = set(), set(), []
     for it in all_items:
-        if it["link"] in seen:
+        key_t = re.sub(r"[^a-z0-9]+", "", it["title"].lower())[:60]
+        if it["link"] in seen or (key_t and key_t in seen_titles):
             continue
         seen.add(it["link"])
+        if key_t:
+            seen_titles.add(key_t)
         deduped.append(it)
 
     assign_ranks(deduped)
