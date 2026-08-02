@@ -543,11 +543,11 @@ def write_html(items, now):
   @media (prefers-color-scheme: dark) {{
     body {{ background:#16181c; color:#eee; }}
     .item {{ border-color:#2a2d33 !important; }} .item:hover {{ background:#1e2127 !important; }}
-    .fbtn {{ background:#23262d; color:#ddd; border-color:#333 !important; }} }}
+    .fbtn {{ background:#23262d; color:#ddd; border-color:#333 !important; }}
+    .stickybar {{ background:#16181c !important; border-bottom-color:#2a2d33 !important; }}
+    #q {{ background:#23262d !important; color:#eee !important; border-color:#333 !important; }} }}
   h1 {{ font-size:1.3rem; margin:.3rem 0; }}
   .sub {{ color:#888; font-size:.8rem; margin-bottom:.7rem; }}
-  .filters {{ display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1rem;
-             position:sticky; top:0; background:inherit; padding:.4rem 0; z-index:5; }}
   .fbtn {{ cursor:pointer; border:1px solid #ccc; border-radius:999px;
           padding:.35rem .8rem; font-size:.8rem; font-weight:600;
           background:#fff; color:#333; }}
@@ -558,18 +558,23 @@ def write_html(items, now):
   .item.hide {{ display:none; }}
   .tag {{ flex:0 0 auto; color:#fff; font-size:.68rem; font-weight:600;
          padding:.12rem .45rem; border-radius:4px; min-width:62px; text-align:center; }}
+  .stickybar {{ position:sticky; top:0; z-index:20; background:#fafafa;
+               padding:.5rem 0 .4rem; border-bottom:1px solid #e5e5e5; }}
+  #q {{ width:100%; padding:.6rem .8rem; margin-bottom:.5rem; border:1px solid #ccc;
+       border-radius:8px; font-size:.95rem; background:#fff; color:#111;
+       text-align:right; direction:rtl; }}
+  .filters {{ display:flex; flex-wrap:wrap; gap:.4rem; }}
   .ttl {{ flex:1 1 auto; font-size:.95rem; line-height:1.35; }}
   .tm {{ flex:0 0 auto; color:#999; font-size:.72rem; font-variant-numeric:tabular-nums; }}
 </style></head><body>
 <h1>מצרף חדשות כלכלה</h1>
 <div class="sub">{len(items)} כותרות · עודכן {il.strftime('%d/%m %H:%M')} (שעון ישראל) ·
 <a href="feed.xml">RSS</a> · <a href="en/">English ›</a></div>
-<input id="q" type="search" dir="rtl" placeholder="חיפוש בכותרות…" oninput="applyFilters()"
-       style="width:100%;padding:.6rem .8rem;margin-bottom:.7rem;border:1px solid #ccc;
-              border-radius:8px;font-size:.95rem;background:#fff;color:#111;
-              text-align:right;direction:rtl;" />
+<div class="stickybar">
+<input id="q" type="search" dir="rtl" placeholder="חיפוש בכותרות…" oninput="applyFilters()" />
 <div class="filters">
 {buttons}
+</div>
 </div>
 {body}
 <script>
