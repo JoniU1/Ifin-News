@@ -32,10 +32,8 @@ WSJ_FEEDS = {
 # Technique: news.google.com/rss/search?q=when:24h+allinurl:<domain>
 # Returns real RSS with timestamps. Used because Barron's publishes no feed
 # and its own pages only expose ~20 links to a scraper.
-GNEWS_FEEDS = {
-    "Barron's": ("https://news.google.com/rss/search"
-                 "?q=when:24h+allinurl:barrons.com&ceid=US:en&hl=en-US&gl=US"),
-}
+# Google News returned 0 items for Barron's in testing, so it's disabled.
+GNEWS_FEEDS = {}
 
 BARRONS = {
     "name": "Barron's",
@@ -44,16 +42,20 @@ BARRONS = {
     # /real-time renders only ~20 items. Rather than guess section URLs,
     # we start from these seeds and then AUTO-DISCOVER further section pages
     # from Barron's own navigation links.
+    # Barron's paginates with a PATH segment: /real-time/2, /real-time/3 ...
+    # (query params like ?page=2 are ignored and serve page 1). ~20 per page.
     "seeds": [
         "https://www.barrons.com/real-time",
-        "https://www.barrons.com/real-time?page=2",
-        "https://www.barrons.com/real-time?page=3",
-        "https://www.barrons.com/real-time?page=4",
-        "https://www.barrons.com/real-time?id=2",
-        "https://www.barrons.com",
+        "https://www.barrons.com/real-time/2",
+        "https://www.barrons.com/real-time/3",
+        "https://www.barrons.com/real-time/4",
+        "https://www.barrons.com/real-time/5",
+        "https://www.barrons.com/real-time/6",
+        "https://www.barrons.com/real-time/7",
+        "https://www.barrons.com/real-time/8",
     ],
     # how many auto-discovered section pages to visit
-    "max_discovered": 8,
+    "max_discovered": 0,
     # skip obviously non-editorial paths when discovering
     "skip_words": ("subscribe", "login", "signin", "account", "customer",
                    "advertis", "privacy", "terms", "help", "podcast", "video",
@@ -161,22 +163,15 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
               file=sys.stderr)
     except Exception:
         pass
-    # scroll to trigger lazy loading
+    # Light scroll to ensure lazy images/links render (pagination does the
+    # heavy lifting via /real-time/N, so no load-more clicking needed).
     try:
-        last = 0
-        for i in range(8):
+        for _ in range(3):
             page.mouse.wheel(0, 5000)
-            page.wait_for_timeout(700)
-            try:
-                cnt = page.eval_on_selector_all(
-                    "a[href*='/articles/']", "els => els.length")
-                if cnt == last and i >= 3:
-                    break
-                last = cnt
-            except Exception:
-                pass
+            page.wait_for_timeout(600)
     except Exception:
         pass
+
     # how many barrons links exist at all vs. article links?
     try:
         stats = page.eval_on_selector_all(
