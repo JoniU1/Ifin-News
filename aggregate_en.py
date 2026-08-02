@@ -3,13 +3,6 @@
 English finance news aggregator — WSJ (official RSS) + Barron's (browser scrape).
 
 Writes en-feed.xml and en.html (separate from the Hebrew feed).
-
-Empirical findings (2026-07): Bloomberg hard-blocks scrapers (CAPTCHA) and has
-no public RSS, so it's dropped. WSJ blocks scraping but publishes official RSS
-feeds, so we use those. Barron's scrape works, so we keep it.
-
-WSJ pulls multiple sections including Real Estate. Barron's is rendered with a
-headless browser and extracted by article-URL pattern.
 """
 
 import re
@@ -32,16 +25,15 @@ BARRONS = {
     "name": "Barron's",
     "pattern": r"barrons\.com/articles/[A-Za-z0-9\-]+",
     "min_title": 15,
-    # /real-time renders only ~20 items, so pull several sections and merge.
-    # Unreachable/renamed URLs simply yield 0 and are logged, never fatal.
-    "urls": [
+    "seeds": [
         "https://www.barrons.com/real-time",
-        "https://www.barrons.com/topics/markets",
-        "https://www.barrons.com/topics/stocks",
-        "https://www.barrons.com/topics/economy-politics",
-        "https://www.barrons.com/topics/technology",
-        "https://www.barrons.com/topics/funds",
+        "https://www.barrons.com",
     ],
+    "max_discovered": 8,
+    "skip_words": ("subscribe", "login", "signin", "account", "customer",
+                   "advertis", "privacy", "terms", "help", "podcast", "video",
+                   "watchlist", "market-data", "quote", "author", "newsletter",
+                   "magazine", "print", "gift", "corporate", "legal"),
 }
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -60,7 +52,6 @@ def fetch_wsj():
     for section, url in WSJ_FEEDS.items():
         print(f"[WSJ/{section}] fetching {url}", file=sys.stderr)
         try:
-            # feedparser fetches and parses; set a UA to be safe
             fp = feedparser.parse(url, request_headers={"User-Agent": UA})
             n = 0
             for e in fp.entries:
@@ -95,7 +86,6 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
         print(f"[Barron's]   goto error: {e}", file=sys.stderr)
         return []
     page.wait_for_timeout(3000)
-    # scroll to trigger lazy loading
     try:
         last = 0
         for i in range(8):
@@ -137,17 +127,63 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
 
 
 def scrape_barrons(page):
+    """
+    Scrape seed pages, then auto-discover more section pages from Barron's own
+    nav links, and scrape those too. All results deduped by article URL.
+    """
     site = BARRONS
     pat = re.compile(site["pattern"])
     seen = set()
     items = []
-    for url in site["urls"]:
+    visited = set()
+
+    for url in site["seeds"]:
+        if url in visited:
+            continue
+        visited.add(url)
         try:
             items.extend(scrape_barrons_page(page, url, pat,
                                              site["min_title"], seen))
         except Exception as e:
             print(f"[Barron's] page error {url}: {e}", file=sys.stderr)
-    # assign sequential order across the merged set
+
+    discovered = []
+    try:
+        hrefs = page.eval_on_selector_all(
+            "a[href]", "els => els.map(e => e.href)")
+        for h in hrefs:
+            if "barrons.com" not in h:
+                continue
+            if "/articles/" in h:
+                continue
+            low = h.lower()
+            if any(w in low for w in site["skip_words"]):
+                continue
+            clean_url = h.split("#")[0].split("?")[0].rstrip("/")
+            tail = clean_url.replace("https://www.barrons.com", "").strip("/")
+            if not tail or tail.count("/") > 1 or len(tail) < 3:
+                continue
+            if clean_url in visited or clean_url in discovered:
+                continue
+            discovered.append(clean_url)
+    except Exception as e:
+        print(f"[Barron's] discovery error: {e}", file=sys.stderr)
+
+    discovered = discovered[: site["max_discovered"]]
+    if discovered:
+        print(f"[Barron's] auto-discovered {len(discovered)} section pages",
+              file=sys.stderr)
+
+    for url in discovered:
+        if url in visited:
+            continue
+        visited.add(url)
+        try:
+            items.extend(scrape_barrons_page(page, url, pat,
+                                             site["min_title"], seen))
+        except Exception as e:
+            print(f"[Barron's] page error {url}: {e}", file=sys.stderr)
+
     for i, it in enumerate(items):
         it["order"] = i
     print(f"[Barron's] extracted {len(items)} headlines total", file=sys.stderr)
@@ -170,9 +206,7 @@ def assign_ranks(items):
 
 def main():
     all_items = []
-    # WSJ via RSS (no browser needed)
     all_items.extend(fetch_wsj())
-    # Barron's via browser
     try:
         with sync_playwright() as p:
             browser = p.chromium.launch(args=["--no-sandbox"])
@@ -185,7 +219,6 @@ def main():
     except Exception as e:
         print(f"[Barron's] browser error: {e}", file=sys.stderr)
 
-    # Dedup
     seen, deduped = set(), []
     for it in all_items:
         if it["link"] in seen:
