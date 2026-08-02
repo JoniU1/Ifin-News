@@ -30,9 +30,18 @@ WSJ_FEEDS = {
 
 BARRONS = {
     "name": "Barron's",
-    "url": "https://www.barrons.com/real-time",
     "pattern": r"barrons\.com/articles/[A-Za-z0-9\-]+",
     "min_title": 15,
+    # /real-time renders only ~20 items, so pull several sections and merge.
+    # Unreachable/renamed URLs simply yield 0 and are logged, never fatal.
+    "urls": [
+        "https://www.barrons.com/real-time",
+        "https://www.barrons.com/topics/markets",
+        "https://www.barrons.com/topics/stocks",
+        "https://www.barrons.com/topics/economy-politics",
+        "https://www.barrons.com/topics/technology",
+        "https://www.barrons.com/topics/funds",
+    ],
 }
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -77,42 +86,27 @@ def fetch_wsj():
     return items
 
 
-def scrape_barrons(page):
-    site = BARRONS
-    print(f"[Barron's] loading {site['url']}", file=sys.stderr)
+def scrape_barrons_page(page, url, pat, min_title, seen):
+    """Scrape one Barron's section page. Returns list of new items."""
+    print(f"[Barron's] loading {url}", file=sys.stderr)
     try:
-        page.goto(site["url"], wait_until="domcontentloaded", timeout=45000)
+        page.goto(url, wait_until="domcontentloaded", timeout=45000)
     except Exception as e:
-        print(f"[Barron's] goto error: {e}", file=sys.stderr)
+        print(f"[Barron's]   goto error: {e}", file=sys.stderr)
         return []
-    page.wait_for_timeout(4000)
-    # Scroll a lot more to pull in additional articles (Barron's lazy-loads),
-    # and click any "load more"/"more" button that appears.
+    page.wait_for_timeout(3000)
+    # scroll to trigger lazy loading
     try:
-        last_count = 0
-        for i in range(15):
+        last = 0
+        for i in range(8):
             page.mouse.wheel(0, 5000)
-            page.wait_for_timeout(900)
-            # try clicking a load-more control if present
-            if i % 3 == 2:
-                for sel in ["button:has-text('More')", "button:has-text('Load More')",
-                            "a:has-text('Load More')", "[class*='loadMore']",
-                            "[class*='LoadMore']"]:
-                    try:
-                        btn = page.query_selector(sel)
-                        if btn:
-                            btn.click(timeout=2000)
-                            page.wait_for_timeout(1500)
-                            break
-                    except Exception:
-                        pass
-            # stop early if the article count stops growing
+            page.wait_for_timeout(700)
             try:
                 cnt = page.eval_on_selector_all(
                     "a[href*='/articles/']", "els => els.length")
-                if cnt == last_count and i >= 6:
+                if cnt == last and i >= 3:
                     break
-                last_count = cnt
+                last = cnt
             except Exception:
                 pass
     except Exception:
@@ -121,25 +115,42 @@ def scrape_barrons(page):
         anchors = page.eval_on_selector_all(
             "a[href]", "els => els.map(e => ({href: e.href, text: e.innerText}))")
     except Exception as e:
-        print(f"[Barron's] anchor read error: {e}", file=sys.stderr)
+        print(f"[Barron's]   anchor read error: {e}", file=sys.stderr)
         return []
 
-    pat = re.compile(site["pattern"])
-    items, seen = [], set()
+    found = []
     for a in anchors:
         href = a.get("href") or ""
         if not pat.search(href):
             continue
         title = clean(a.get("text"))
-        if len(title) < site["min_title"]:
+        if len(title) < min_title:
             continue
         link = href.split("#")[0].split("?")[0]
         if link in seen:
             continue
         seen.add(link)
-        items.append({"title": title, "link": link, "source": "Barron's",
-                      "section": "", "ts": None, "order": len(items)})
-    print(f"[Barron's] extracted {len(items)} headlines", file=sys.stderr)
+        found.append({"title": title, "link": link, "source": "Barron's",
+                      "section": "", "ts": None, "order": 0})
+    print(f"[Barron's]   +{len(found)} new from this page", file=sys.stderr)
+    return found
+
+
+def scrape_barrons(page):
+    site = BARRONS
+    pat = re.compile(site["pattern"])
+    seen = set()
+    items = []
+    for url in site["urls"]:
+        try:
+            items.extend(scrape_barrons_page(page, url, pat,
+                                             site["min_title"], seen))
+        except Exception as e:
+            print(f"[Barron's] page error {url}: {e}", file=sys.stderr)
+    # assign sequential order across the merged set
+    for i, it in enumerate(items):
+        it["order"] = i
+    print(f"[Barron's] extracted {len(items)} headlines total", file=sys.stderr)
     return items
 
 
