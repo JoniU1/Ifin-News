@@ -86,10 +86,35 @@ def scrape_barrons(page):
         print(f"[Barron's] goto error: {e}", file=sys.stderr)
         return []
     page.wait_for_timeout(4000)
+    # Scroll a lot more to pull in additional articles (Barron's lazy-loads),
+    # and click any "load more"/"more" button that appears.
     try:
-        for _ in range(3):
-            page.mouse.wheel(0, 4000)
-            page.wait_for_timeout(700)
+        last_count = 0
+        for i in range(15):
+            page.mouse.wheel(0, 5000)
+            page.wait_for_timeout(900)
+            # try clicking a load-more control if present
+            if i % 3 == 2:
+                for sel in ["button:has-text('More')", "button:has-text('Load More')",
+                            "a:has-text('Load More')", "[class*='loadMore']",
+                            "[class*='LoadMore']"]:
+                    try:
+                        btn = page.query_selector(sel)
+                        if btn:
+                            btn.click(timeout=2000)
+                            page.wait_for_timeout(1500)
+                            break
+                    except Exception:
+                        pass
+            # stop early if the article count stops growing
+            try:
+                cnt = page.eval_on_selector_all(
+                    "a[href*='/articles/']", "els => els.length")
+                if cnt == last_count and i >= 6:
+                    break
+                last_count = cnt
+            except Exception:
+                pass
     except Exception:
         pass
     try:
@@ -224,11 +249,16 @@ def write_html(items, now):
   @media (prefers-color-scheme: dark) {{
     body {{ background:#16181c; color:#eee; }}
     .item {{ border-color:#2a2d33 !important; }} .item:hover {{ background:#1e2127 !important; }}
-    .fbtn {{ background:#23262d; color:#ddd; border-color:#333 !important; }} }}
+    .fbtn {{ background:#23262d; color:#ddd; border-color:#333 !important; }}
+    .stickybar {{ background:#16181c !important; border-bottom-color:#2a2d33 !important; }}
+    #q {{ background:#23262d !important; color:#eee !important; border-color:#333 !important; }} }}
   h1 {{ font-size:1.3rem; margin:.3rem 0; }}
   .sub {{ color:#888; font-size:.8rem; margin-bottom:.7rem; }}
-  .filters {{ display:flex; flex-wrap:wrap; gap:.4rem; margin-bottom:1rem;
-             position:sticky; top:0; background:inherit; padding:.4rem 0; z-index:5; }}
+  .stickybar {{ position:sticky; top:0; z-index:20; background:#fafafa;
+               padding:.5rem 0 .4rem; border-bottom:1px solid #e5e5e5; }}
+  #q {{ width:100%; padding:.6rem .8rem; margin-bottom:.5rem; border:1px solid #ccc;
+       border-radius:8px; font-size:.95rem; background:#fff; color:#111; }}
+  .filters {{ display:flex; flex-wrap:wrap; gap:.4rem; }}
   .fbtn {{ cursor:pointer; border:1px solid #ccc; border-radius:999px;
           padding:.35rem .8rem; font-size:.8rem; font-weight:600; background:#fff; color:#333; }}
   .fbtn.active {{ background:var(--c,#333); color:#fff; border-color:var(--c,#333); }}
@@ -244,11 +274,11 @@ def write_html(items, now):
 <h1>English Finance Aggregator</h1>
 <div class="sub">WSJ · Barron's — {len(items)} headlines ·
 updated {now.strftime('%d/%m %H:%M')} UTC · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
-<input id="q" type="search" placeholder="Search headlines…" oninput="applyFilters()"
-       style="width:100%;padding:.6rem .8rem;margin-bottom:.7rem;border:1px solid #ccc;
-              border-radius:8px;font-size:.95rem;background:#fff;color:#111;" />
+<div class="stickybar">
+<input id="q" type="search" placeholder="Search headlines…" oninput="applyFilters()" />
 <div class="filters">
 {buttons}
+</div>
 </div>
 {body}
 <script>
