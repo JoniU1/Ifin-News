@@ -334,6 +334,60 @@ def scrape_barrons(page):
     return items
 
 
+def enrich_barrons_times(page, items, limit=45):
+    """
+    Barron's list pages only say "1 DAY AGO" for older articles, but each
+    article page carries an exact publish time. For items we only know to
+    day-granularity, open the article and read its published-time metadata.
+
+    Capped by `limit` so the build stays fast. Failures are skipped silently:
+    the item just keeps its day-level timestamp.
+    """
+    targets = [it for it in items
+               if it["source"] == "Barron's" and it.get("ts")
+               and not it.get("precise", True)]
+    if not targets:
+        return
+    targets = targets[:limit]
+    print(f"[Barron's] fetching exact times for {len(targets)} day-old articles",
+          file=sys.stderr)
+
+    fixed = 0
+    for it in targets:
+        try:
+            page.goto(it["link"], wait_until="domcontentloaded", timeout=20000)
+            page.wait_for_timeout(600)
+            iso = page.evaluate(
+                """() => {
+                    const sel = [
+                      'meta[property="article:published_time"]',
+                      'meta[name="article.published"]',
+                      'meta[name="datePublished"]',
+                      'meta[itemprop="datePublished"]'
+                    ];
+                    for (const s of sel) {
+                      const el = document.querySelector(s);
+                      if (el && el.content) return el.content;
+                    }
+                    const t = document.querySelector('time[datetime]');
+                    if (t) return t.getAttribute('datetime');
+                    return null;
+                }""")
+            if not iso:
+                continue
+            iso = iso.strip().replace("Z", "+00:00")
+            ts = dt.datetime.fromisoformat(iso)
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=dt.timezone.utc)
+            it["ts"] = ts.astimezone(dt.timezone.utc)
+            it["precise"] = True
+            fixed += 1
+        except Exception:
+            continue
+    print(f"[Barron's] got exact times for {fixed}/{len(targets)}",
+          file=sys.stderr)
+
+
 def assign_ranks(items):
     now = dt.datetime.now(dt.timezone.utc)
     counts = {}
@@ -362,7 +416,11 @@ def main():
                 locale="en-US", timezone_id="America/New_York",
                 user_agent=UA, viewport={"width": 1280, "height": 1600})
             page = ctx.new_page()
-            all_items.extend(scrape_barrons(page))
+            barrons_items = scrape_barrons(page)
+            # Day-old Barron's items only have day precision from the list
+            # page; open those articles to read their exact publish time.
+            enrich_barrons_times(page, barrons_items)
+            all_items.extend(barrons_items)
             browser.close()
     except Exception as e:
         print(f"[Barron's] browser error: {e}", file=sys.stderr)
