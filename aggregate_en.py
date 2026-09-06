@@ -240,6 +240,7 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
         ctx = (a.get("ctx") or "").lower()
         m = re.search(
             r"(\d+)\s*(second|sec|minute|min|hour|hr|day)s?\s*ago", ctx)
+        precise = True
         if m:
             qty = int(m.group(1))
             unit = m.group(2)
@@ -251,11 +252,13 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
                 delta = dt.timedelta(hours=qty)
             else:
                 delta = dt.timedelta(days=qty)
+                # "3 days ago" tells us the day, not the minute
+                precise = False
             ts = now_utc - delta
             dated += 1
 
         found.append({"title": title, "link": link, "source": "Barron's",
-                      "section": "", "ts": ts, "order": 0})
+                      "section": "", "ts": ts, "precise": precise, "order": 0})
     print(f"[Barron's]   +{len(found)} new from this page "
           f"({dated} with time)", file=sys.stderr)
     return found
@@ -419,9 +422,17 @@ def write_html(items, now):
         # Show a clock time only for today's articles. Older items (e.g.
         # Barron's "1 DAY AGO") have no real time precision, so show the date
         # instead of implying a specific minute.
+        # Today -> clock time. Older -> date + time when we know the real time
+        # (WSJ RSS), or date only when the source gave day-granularity such as
+        # Barron's "1 DAY AGO".
         if it.get("ts"):
             ts = it["ts"].astimezone(DISPLAY_TZ)
-            t = ts.strftime("%H:%M") if ts.date() == today else ts.strftime("%d/%m")
+            if ts.date() == today:
+                t = ts.strftime("%H:%M")
+            elif it.get("precise", True):
+                t = ts.strftime("%d/%m %H:%M")
+            else:
+                t = ts.strftime("%d/%m")
         else:
             t = "—"
         label = it["source"] + (f" · {it['section']}" if it.get("section") else "")
@@ -472,7 +483,8 @@ def write_html(items, now):
   .tag {{ flex:0 0 auto; color:#fff; font-size:.66rem; font-weight:600;
          padding:.12rem .45rem; border-radius:4px; min-width:96px; text-align:center; }}
   .ttl {{ flex:1 1 auto; font-size:.95rem; line-height:1.35; }}
-  .tm {{ flex:0 0 auto; color:#999; font-size:.72rem; font-variant-numeric:tabular-nums; }}
+  .tm {{ flex:0 0 auto; color:#999; font-size:.72rem; white-space:nowrap;
+        font-variant-numeric:tabular-nums; }}
 </style></head><body>
 <h1>English Finance Aggregator</h1>
 <div class="sub">WSJ · Barron's — {len(items)} headlines ·
