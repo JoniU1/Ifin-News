@@ -35,7 +35,7 @@ SITES = [
      "min_title": 15},
     {"name": "Bizportal",
      "url": "https://www.bizportal.co.il/todays_headlines",
-     "pattern": r"bizportal\.co\.il/[^\"']*/news/article/\d+",
+     "pattern": r"bizportal\.co\.il/[^\"']*article/[A-Za-z0-9\-]+",
      "min_title": 15},
     {"name": "Globes",
      "url": "https://www.globes.co.il/news/home.aspx?fid=9473",
@@ -303,6 +303,19 @@ def scrape_site(page, site):
             page.wait_for_timeout(800)
     except Exception:
         pass
+
+    # Diagnostic: show a few real links from this site so that if the pattern
+    # stops matching (site changed its URL format) we can see the new shape.
+    try:
+        host = site["url"].split("/")[2].replace("www.", "")
+        samples = page.eval_on_selector_all(
+            "a[href]",
+            """(els, host) => els.map(e => e.href)
+                 .filter(h => h.includes(host))
+                 .slice(0, 6)""", host)
+        print(f"[{site['name']}] sample links: {samples}", file=sys.stderr)
+    except Exception as e:
+        print(f"[{site['name']}] sample-link error: {e}", file=sys.stderr)
 
     # For each matching link, grab its href, text, AND the text of a nearby
     # container so we can read the date/time shown beside it. Some sites
