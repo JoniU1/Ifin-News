@@ -16,6 +16,12 @@ import re
 import sys
 import html
 import datetime as dt
+from zoneinfo import ZoneInfo
+
+# Display timezone for the English page. Israel time keeps it consistent with
+# the Hebrew page; ZoneInfo handles summer/winter (UTC+3 / UTC+2) automatically.
+DISPLAY_TZ = ZoneInfo("Asia/Jerusalem")
+TZ_LABEL = "Israel time"
 
 import feedparser
 from feedgen.feed import FeedGenerator
@@ -188,20 +194,26 @@ def scrape_barrons_page(page, url, pat, min_title, seen):
         anchors = page.eval_on_selector_all(
             "a[href]",
             """els => els.map(e => {
-                // climb to a container likely holding the "X hours ago" label
+                // Barron's uses a timeline layout: the "X ago" label sits in a
+                // separate column from the headline. Climb up only while the
+                // container still holds exactly ONE article link — otherwise we
+                // grab a neighbouring article's timestamp.
                 let ctx = e;
-                for (let i = 0; i < 5 && ctx.parentElement; i++) {
-                    ctx = ctx.parentElement;
-                    if (ctx.innerText && ctx.innerText.length > e.innerText.length + 8) break;
+                let best = null;
+                let node = e;
+                for (let i = 0; i < 6 && node.parentElement; i++) {
+                    node = node.parentElement;
+                    const arts = node.querySelectorAll('a[href*="/articles/"]');
+                    if (arts.length > 1) break;      // climbed too far
+                    const txt = node.innerText || "";
+                    if (/\\d+\\s*(second|sec|minute|min|hour|hr|day)s?\\s*ago/i.test(txt)) {
+                        best = txt;                  // this row has its own time
+                        break;
+                    }
+                    ctx = node;
                 }
-                let extra = "";
-                try {
-                    if (ctx.previousElementSibling) extra += " " + ctx.previousElementSibling.innerText;
-                    if (ctx.nextElementSibling)     extra += " " + ctx.nextElementSibling.innerText;
-                    if (e.nextElementSibling)       extra += " " + e.nextElementSibling.innerText;
-                } catch (err) {}
                 return {href: e.href, text: e.innerText,
-                        ctx: (ctx ? ctx.innerText : "") + extra};
+                        ctx: best !== null ? best : (ctx.innerText || "")};
             })""")
     except Exception as e:
         print(f"[Barron's]   anchor read error: {e}", file=sys.stderr)
@@ -398,10 +410,19 @@ SITE_COLORS = {"WSJ": "#0080c6", "Barron's": "#00625b"}
 
 
 def write_html(items, now):
+    # Work in the display timezone so "today" and the clock times agree.
+    today = now.astimezone(DISPLAY_TZ).date()
     rows = []
     for it in items:
         color = SITE_COLORS.get(it["source"], "#666")
-        t = it["sort_dt"].strftime("%H:%M") if it.get("ts") else "—"
+        # Show a clock time only for today's articles. Older items (e.g.
+        # Barron's "1 DAY AGO") have no real time precision, so show the date
+        # instead of implying a specific minute.
+        if it.get("ts"):
+            ts = it["ts"].astimezone(DISPLAY_TZ)
+            t = ts.strftime("%H:%M") if ts.date() == today else ts.strftime("%d/%m")
+        else:
+            t = "—"
         label = it["source"] + (f" · {it['section']}" if it.get("section") else "")
         title = html.escape(it["title"])
         rows.append(
@@ -454,7 +475,7 @@ def write_html(items, now):
 </style></head><body>
 <h1>English Finance Aggregator</h1>
 <div class="sub">WSJ · Barron's — {len(items)} headlines ·
-updated {now.strftime('%d/%m %H:%M')} UTC · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
+updated {now.astimezone(DISPLAY_TZ).strftime('%d/%m %H:%M')} ({TZ_LABEL}) · <a href="feed.xml">RSS</a> · <a href="../">‹ עברית</a></div>
 <div class="stickybar">
 <input id="q" type="search" placeholder="Search headlines…" oninput="applyFilters()" />
 <div class="filters">
