@@ -18,10 +18,11 @@ import html
 import datetime as dt
 from zoneinfo import ZoneInfo
 
-# Display timezone for the English page. Israel time keeps it consistent with
-# the Hebrew page; ZoneInfo handles summer/winter (UTC+3 / UTC+2) automatically.
-DISPLAY_TZ = ZoneInfo("Asia/Jerusalem")
-TZ_LABEL = "Israel time"
+# Display timezone for the English page. US Eastern matches the markets these
+# sources cover (a 16:00 stamp = US market close). ZoneInfo handles EST/EDT
+# automatically. The Hebrew page is unaffected and stays on Israel time.
+DISPLAY_TZ = ZoneInfo("America/New_York")
+TZ_LABEL = "ET"
 
 import feedparser
 from feedgen.feed import FeedGenerator
